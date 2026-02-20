@@ -2,7 +2,7 @@ import datetime
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
 import database
-from database import SessionLocal, Order, Product, Return, Store
+from database import SessionLocal, Order, Product, Return, Store, SupportTicket
 
 def get_db():
     return SessionLocal()
@@ -140,6 +140,29 @@ def get_product_info(query: str) -> Dict[str, Any]:
     finally:
         db.close()
 
+def create_support_ticket(email: str, reason: str, conversation_summary: str) -> Dict[str, Any]:
+    db = get_db()
+    try:
+        ticket = SupportTicket(
+            customer_email=email,
+            reason=reason,
+            conversation_summary=conversation_summary,
+            status="open"
+        )
+        db.add(ticket)
+        db.commit()
+        db.refresh(ticket)
+        return {
+            "success": True,
+            "ticket_id": ticket.id,
+            "message": f"Support ticket #{ticket.id} has been created. A human agent will review your case shortly."
+        }
+    except Exception as e:
+        db.rollback()
+        return {"error": f"Failed to create support ticket: {str(e)}"}
+    finally:
+        db.close()
+
 # Tool definitions for OpenAI function calling
 TOOLS = [
     {
@@ -212,6 +235,22 @@ TOOLS = [
                 "required": ["email"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_support_ticket",
+            "description": "Escalate the issue to a human agent by creating a support ticket. Use this when the customer is angry, a refund is outside policy, there's a tool error, or fraud is suspected.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "email": {"type": "string", "description": "The customer's email address."},
+                    "reason": {"type": "string", "description": "The reason for escalation (e.g., 'Angry customer', 'Refund outside policy', 'Fraud suspicion')."},
+                    "conversation_summary": {"type": "string", "description": "A brief summary of the conversation so far for the human agent."}
+                },
+                "required": ["email", "reason", "conversation_summary"]
+            }
+        }
     }
 ]
 
@@ -226,4 +265,6 @@ def call_tool(name: str, args: Dict[str, Any]) -> Any:
         return get_product_info(**args)
     elif name == "list_customer_orders":
         return list_customer_orders(**args)
+    elif name == "create_support_ticket":
+        return create_support_ticket(**args)
     return {"error": f"Tool {name} not found."}

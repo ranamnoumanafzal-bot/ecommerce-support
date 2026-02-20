@@ -75,6 +75,15 @@ class ChatMessage(Base):
     tool_calls_json = Column(Text, nullable=True) # For assistant role with tool calls
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+class SupportTicket(Base):
+    __tablename__ = "support_tickets"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    customer_email = Column(String, index=True)
+    reason = Column(String)
+    conversation_summary = Column(Text)
+    status = Column(String, default="open") # open, in_progress, resolved
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 def get_db():
     db = SessionLocal()
     try:
