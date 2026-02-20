@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - AI Support</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+        }
+
+        .glass {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .sidebar-item.active {
+            background: rgba(59, 130, 246, 0.2);
+            border-left: 4px solid #3b82f6;
+            color: #3b82f6;
+        }
+    </style>
+</head>
+
+<body class="h-screen overflow-hidden">
+    <div id="login-screen" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950">
+        <div class="glass p-8 rounded-2xl w-full max-w-md">
+            <h1 class="text-2xl font-bold mb-6 text-center">Admin Access</h1>
+            <div class="space-y-4">
+                <input type="text" id="username" placeholder="Username"
+                    class="w-full bg-slate-800 border-none rounded-lg p-3 focus:ring-2 focus:ring-blue-500 outline-none">
+                <input type="password" id="password" placeholder="Password"
+                    class="w-full bg-slate-800 border-none rounded-lg p-3 focus:ring-2 focus:ring-blue-500 outline-none">
+                <button onclick="login()"
+                    class="w-full bg-blue-600 hover:bg-blue-500 py-3 rounded-lg font-bold transition-all">Login</button>
+            </div>
+            <p id="login-error" class="text-red-400 text-sm mt-4 hidden text-center">Invalid credentials</p>
+        </div>
+    </div>
+
+    <div id="main-dashboard" class="hidden flex h-full">
+        <!-- Sidebar -->
+        <div class="w-64 glass border-r border-slate-700 p-4 flex flex-col">
+            <h2 class="text-xl font-bold px-4 mb-8 text-blue-400">Support Admin</h2>
+            <nav class="flex-1 space-y-1">
+                <button onclick="showPage('analytics')"
+                    class="sidebar-item w-full flex items-center px-4 py-3 rounded-lg transition-all"
+                    id="nav-analytics">Analytics</button>
+                <button onclick="showPage('conversations')"
+                    class="sidebar-item w-full flex items-center px-4 py-3 rounded-lg transition-all"
+                    id="nav-conversations">Conversations</button>
+                <button onclick="showPage('tickets')"
+                    class="sidebar-item w-full flex items-center px-4 py-3 rounded-lg transition-all"
+                    id="nav-tickets">Tickets</button>
+                <button onclick="showPage('settings')"
+                    class="sidebar-item w-full flex items-center px-4 py-3 rounded-lg transition-all"
+                    id="nav-settings">Settings</button>
+            </nav>
+            <button onclick="logout()" class="p-4 text-slate-400 hover:text-white text-left">Logout</button>
+        </div>
+
+        <!-- Content -->
+        <main class="flex-1 overflow-y-auto p-8">
+            <header class="mb-8 flex justify-between items-center">
+                <h1 id="page-title" class="text-3xl font-bold">Dashboard</h1>
+                <div class="flex items-center space-x-4">
+                    <span id="admin-name" class="text-slate-400"></span>
+                </div>
+            </header>
+
+            <!-- Page: Analytics -->
+            <div id="page-analytics" class="page-content grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="glass p-6 rounded-2xl">
+                    <p class="text-slate-400 mb-2">Total Conversations</p>
+                    <h3 id="stat-total-convs" class="text-4xl font-bold">0</h3>
+                </div>
+                <div class="glass p-6 rounded-2xl">
+                    <p class="text-slate-400 mb-2">Escalation Rate</p>
+                    <h3 id="stat-escalation-rate" class="text-4xl font-bold">0%</h3>
+                </div>
+                <div class="glass p-6 rounded-2xl">
+                    <p class="text-slate-400 mb-2">Open Tickets</p>
+                    <h3 id="stat-total-tickets" class="text-4xl font-bold">0</h3>
+                </div>
+            </div>
+
+            <!-- Page: Conversations -->
+            <div id="page-conversations" class="page-content hidden space-y-4">
+                <div class="glass rounded-xl overflow-hidden">
+                    <table class="w-full text-left">
+                        <thead class="bg-slate-800/50">
+                            <tr>
+                                <th class="p-4">Customer</th>
+                                <th class="p-4">Started At</th>
+                                <th class="p-4">Status</th>
+                                <th class="p-4">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="conv-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Page: Tickets -->
+            <div id="page-tickets" class="page-content hidden space-y-4">
+                <div class="glass rounded-xl overflow-hidden">
+                    <table class="w-full text-left">
+                        <thead class="bg-slate-800/50">
+                            <tr>
+                                <th class="p-4">Ticket ID</th>
+                                <th class="p-4">Reason</th>
+                                <th class="p-4">Status</th>
+                                <th class="p-4">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ticket-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Page: Settings -->
+            <div id="page-settings" class="page-content hidden">
+                <div class="glass p-8 rounded-2xl max-w-lg">
+                    <div class="space-y-6">
+                        <div>
+                            <label class="block text-slate-400 mb-2">Return Windows (Days)</label>
+                            <input type="number" id="setting-return-days"
+                                class="w-full bg-slate-800 p-3 rounded-lg outline-none">
+                        </div>
+                        <div>
+                            <label class="flex items-center space-x-3 cursor-pointer">
+                                <input type="checkbox" id="setting-allow-cancel"
+                                    class="form-checkbox h-5 w-5 text-blue-600">
+                                <span class="text-slate-400">Allow Order Cancellation</span>
+                            </label>
+                        </div>
+                        <div>
+                            <label class="block text-slate-400 mb-2">Agent Tone</label>
+                            <select id="setting-tone" class="w-full bg-slate-800 p-3 rounded-lg outline-none">
+                                <option value="friendly">Friendly</option>
+                                <option value="formal">Formal</option>
+                            </select>
+                        </div>
+                        <button onclick="saveSettings()"
+                            class="w-full bg-green-600 hover:bg-green-500 py-3 rounded-lg font-bold transition-all">Save
+                            Changes</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Chat Modal -->
+    <div id="chat-modal" class="fixed inset-0 z-50 hidden bg-slate-950/80 flex items-center justify-center p-4">
+        <div class="glass w-full max-w-4xl h-[80vh] rounded-3xl flex flex-col overflow-hidden">
+            <div class="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800/50">
+                <h3 class="text-lg font-bold" id="modal-chat-title">Chat with Customer</h3>
+                <button onclick="closeChat()" class="text-slate-400 hover:text-white">Close</button>
+            </div>
+            <div id="chat-history" class="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-900/50"></div>
+            <div id="chat-controls" class="p-4 bg-slate-800/50 border-t border-slate-700 flex space-x-3">
+                <input type="text" id="human-reply" placeholder="Type as a human agent..."
+                    class="flex-1 bg-slate-700 p-3 rounded-lg outline-none">
+                <button onclick="sendReply()" class="bg-blue-600 px-6 py-2 rounded-lg font-bold">Reply</button>
+                <button id="btn-takeover" onclick="takeover()" class="bg-orange-600 px-6 py-2 rounded-lg font-bold">Take
+                    Over</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = "http://localhost:8000";
+        let token = localStorage.getItem('admin_token');
+        let activeConvId = null;
+
+        if (token) showDashboard();
+
+        async function login() {
+            const res = await fetch(`${API_BASE}/admin/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username.value, password: password.value })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                token = data.token;
+                localStorage.setItem('admin_token', token);
+                showDashboard();
+            } else {
+                document.getElementById('login-error').classList.remove('hidden');
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('admin_token');
+            location.reload();
+        }
+
+        function showDashboard() {
+            document.getElementById('login-screen').classList.add('hidden');
+            document.getElementById('main-dashboard').classList.remove('hidden');
+            showPage('analytics');
+        }
+
+        async function showPage(page) {
+            document.querySelectorAll('.page-content').forEach(p => p.classList.add('hidden'));
+            document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+            document.getElementById(`page-${page}`).classList.remove('hidden');
+            document.getElementById(`nav-${page}`).classList.add('active');
+            document.getElementById('page-title').innerText = page.charAt(0).toUpperCase() + page.slice(1);
+
+            if (page === 'analytics') loadAnalytics();
+            if (page === 'conversations') loadConversations();
+            if (page === 'tickets') loadTickets();
+            if (page === 'settings') loadSettings();
+        }
+
+        async function loadAnalytics() {
+            const res = await fetch(`${API_BASE}/admin/analytics`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const data = await res.json();
+            stat_total_convs.innerText = data.total_conversations;
+            stat_escalation_rate.innerText = data.escalation_rate.toFixed(1) + "%";
+            stat_total_tickets.innerText = data.total_tickets;
+        }
+
+        async function loadConversations() {
+            const res = await fetch(`${API_BASE}/admin/conversations`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const data = await res.json();
+            const body = document.getElementById('conv-table-body');
+            body.innerHTML = data.map(c => `
+                <tr class="border-b border-slate-700/50 hover:bg-slate-700/20">
+                    <td class="p-4">${c.customer_email}</td>
+                    <td class="p-4 text-sm text-slate-400">${new Date(c.started_at).toLocaleString()}</td>
+                    <td class="p-4">
+                        <span class="px-3 py-1 rounded-full text-xs font-bold ${c.status === 'open' ? 'bg-green-900/50 text-green-400' : 'bg-orange-900/50 text-orange-400'}">
+                            ${c.status.toUpperCase()}
+                        </span>
+                    </td>
+                    <td class="p-4">
+                        <button onclick="viewChat('${c.id}')" class="text-blue-400 hover:text-blue-300 font-medium">View History</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function viewChat(convId) {
+            activeConvId = convId;
+            const res = await fetch(`${API_BASE}/admin/conversations/${convId}/messages`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const msgs = await res.json();
+            const hist = document.getElementById('chat-history');
+            hist.innerHTML = msgs.map(m => `
+                <div class="flex flex-col ${m.sender === 'user' ? 'items-start' : 'items-end'}">
+                    <span class="text-[10px] text-slate-500 mb-1 uppercase tracking-widest">${m.sender}</span>
+                    <div class="p-3 rounded-2xl max-w-md ${m.sender === 'user' ? 'bg-slate-800 rounded-tl-none' : (m.sender === 'human' ? 'bg-blue-600 rounded-tr-none' : 'bg-slate-700 rounded-tr-none')}">
+                        ${m.message}
+                    </div>
+                </div>
+            `).join('');
+            document.getElementById('chat-modal').classList.remove('hidden');
+        }
+
+        function closeChat() {
+            document.getElementById('chat-modal').classList.add('hidden');
+            activeConvId = null;
+        }
+
+        async function sendReply() {
+            const msg = document.getElementById('human-reply').value;
+            if (!msg) return;
+            const res = await fetch(`${API_BASE}/admin/conversations/${activeConvId}/reply`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ message: msg })
+            });
+            if (res.ok) {
+                document.getElementById('human-reply').value = '';
+                viewChat(activeConvId);
+            }
+        }
+
+        async function takeover() {
+            const res = await fetch(`${API_BASE}/admin/conversations/${activeConvId}/takeover`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                alert("Agent stopped. You are now in full control.");
+                loadConversations();
+            }
+        }
+
+        async function loadTickets() {
+            const res = await fetch(`${API_BASE}/admin/tickets`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const data = await res.json();
+            const body = document.getElementById('ticket-table-body');
+            body.innerHTML = data.map(t => `
+                <tr class="border-b border-slate-700/50 hover:bg-slate-700/20">
+                    <td class="p-4">#${t.id}</td>
+                    <td class="p-4">${t.reason}</td>
+                    <td class="p-4">
+                        <span class="px-3 py-1 rounded-full text-xs font-bold ${t.status === 'open' ? 'bg-red-900/50 text-red-400' : 'bg-green-900/50 text-green-400'}">
+                            ${t.status.toUpperCase()}
+                        </span>
+                    </td>
+                    <td class="p-4">
+                        ${t.status === 'open' ? `<button onclick="resolveTicket(${t.id})" class="text-green-400 hover:text-green-300">Resolve</button>` : '---'}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function resolveTicket(id) {
+            await fetch(`${API_BASE}/admin/tickets/${id}/resolve`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            loadTickets();
+        }
+
+        async function loadSettings() {
+            const res = await fetch(`${API_BASE}/admin/settings`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const data = await res.json();
+            document.getElementById('setting-return-days').value = data.return_days_policy;
+            document.getElementById('setting-allow-cancel').checked = data.allow_order_cancel;
+            document.getElementById('setting-tone').value = data.tone;
+        }
+
+        async function saveSettings() {
+            const res = await fetch(`${API_BASE}/admin/settings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({
+                    return_days_policy: parseInt(document.getElementById('setting-return-days').value),
+                    allow_order_cancel: document.getElementById('setting-allow-cancel').checked,
+                    tone: document.getElementById('setting-tone').value
+                })
+            });
+            if (res.ok) alert("Settings saved successfully!");
+        }
+    </script>
+</body>
+
+</html>

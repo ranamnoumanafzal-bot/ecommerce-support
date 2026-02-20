@@ -1,0 +1,5 @@
+{
+  "message": "hello",
+  "customer_email": "user@example.com",
+  "session_id": "test_curl_123"
+}

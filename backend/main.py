@@ -1,19 +1,30 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import os
 import json
+import datetime
+import jwt
+from passlib.context import CryptContext
 from openai import OpenAI
 from dotenv import load_dotenv
 
-import tools
+from . import tools
+from .database import SessionLocal, Conversation, Message, Ticket, StoreSettings, User, ConversationAnalytics
 
 load_dotenv()
 
-app = FastAPI(title="Ecommerce AI Support Agent")
+app = FastAPI(title="Professional Ecommerce AI Support")
 
-# Enable CORS for frontend
+# Security setup
+SECRET_KEY = os.getenv("JWT_SECRET", "super-secret-key-123")
+ALGORITHM = "HS256"
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security = HTTPBearer()
+
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,109 +33,130 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Use Hugging Face OpenAI-compatible endpoint
 client = OpenAI(
     base_url="https://router.huggingface.co/v1/",
     api_key=os.getenv("HUGGINGFACE_API_KEY")
 )
-
-# Use a model that supports Tool Calling (Qwen 2.5 is excellent for this)
 MODEL_NAME = "Qwen/Qwen2.5-72B-Instruct"
 
+# --- Models ---
 class ChatRequest(BaseModel):
     message: str
     customer_email: str
-    session_id: Optional[str] = "default"
+    session_id: str # now maps to conversation_id
 
 class ChatResponse(BaseModel):
-    response: str
+    response: Optional[str]
     session_id: str
+    status: str # open, escalated, closed
 
-SYSTEM_PROMPT = """
-You are a professional ecommerce support assistant named EcommerceSupportAgent.
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
-You now have access to a scalable database with multi-store support.
-Always verify order ownership (check if the order belongs to the customer's email) before sharing details.
-If a customer asks about their orders but doesn't provide an order ID, use the 'list_customer_orders' tool with their email to find their orders first.
-Always use tools when needed to fetch real-time data.
-You can now provide detailed order information including:
-- Order Status and History
-- Total Amount
-- Shipping Address and Tracking ID
-- Store-specific return policies (check return eligibility tool)
+# --- Auth Helpers ---
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-Follow the return policy provided by the 'check_return_eligibility' tool, as it now accounts for store-specific policies.
+def get_current_user(auth: HTTPAuthorizationCredentials = Security(security)):
+    try:
+        payload = jwt.decode(auth.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("sub")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-HUMAN ESCALATION:
-Use the 'create_support_ticket' tool to escalate to a human agent in the following cases:
-1. Customer is extremely angry, frustrated, or abusive.
-2. Customer requests a refund or return that is strictly outside the calculated policy but insists on it.
-3. You encounter a technical error or the customer reports a major bug.
-4. You suspect fraudulent activity.
-5. The customer's request is beyond your capabilities or scope.
+# --- Helper Functions ---
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-Be polite, concise, and helpful.
-"""
-
-from database import SessionLocal, ChatMessage
-
-def save_message(db, session_id, role, content=None, tool_call_id=None, name=None, tool_calls_json=None):
-    msg = ChatMessage(
-        session_id=session_id,
-        role=role,
-        content=content,
+def save_msg(db, conv_id, sender, text, tool_call_id=None, name=None, tool_calls_json=None):
+    msg = Message(
+        conversation_id=conv_id,
+        sender=sender,
+        message=text,
         tool_call_id=tool_call_id,
         name=name,
         tool_calls_json=tool_calls_json
     )
-    try:
-        db.add(msg)
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        print(f"Failed to save message to session {session_id}: {e}")
+    db.add(msg)
+    db.commit()
 
-def get_session_messages(db, session_id, limit=10):
-    messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.id.desc()).limit(limit).all()
-    messages.reverse()
-    
-    formatted_messages = []
-    for m in messages:
-        msg = {"role": m.role}
-        if m.content is not None:
-            msg["content"] = m.content
-        if m.name:
-            msg["name"] = m.name
-        if m.tool_call_id:
-            msg["tool_call_id"] = m.tool_call_id
-        if m.tool_calls_json:
-            msg["tool_calls"] = json.loads(m.tool_calls_json)
-        formatted_messages.append(msg)
-    return formatted_messages
+def update_analytics(db, session_id, email, tool_calls=0, escalated=False):
+    # Backward compatibility with your existing analytics table
+    analytics = db.query(ConversationAnalytics).filter(ConversationAnalytics.session_id == session_id).first()
+    if not analytics:
+        analytics = ConversationAnalytics(session_id=session_id, customer_email=email)
+        db.add(analytics)
+    analytics.message_count += 1
+    analytics.tool_calls_count += tool_calls
+    if escalated:
+        analytics.was_escalated = True
+        analytics.resolution_type = "escalated"
+    db.commit()
+
+# --- Public Endpoints ---
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    session_id = request.session_id
     db = SessionLocal()
-    
     try:
-        # Load last 10 messages from DB
-        history = get_session_messages(db, session_id, limit=10)
+        conv = db.query(Conversation).filter(Conversation.id == request.session_id).first()
+        if not conv:
+            conv = Conversation(id=request.session_id, customer_email=request.customer_email)
+            db.add(conv)
+            db.commit()
+            save_msg(db, conv.id, "system", "You are a professional support agent.")
         
-        if not history:
-            # Initialize with system prompt if new session
-            save_message(db, session_id, "system", SYSTEM_PROMPT)
-            history = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # HUMAN TAKEOVER CHECK
+        if conv.status == "escalated":
+            return ChatResponse(
+                response="A human agent has taken over this chat. Please wait for their response.",
+                session_id=conv.id,
+                status="escalated"
+            )
+
+        # Save user message
+        save_msg(db, conv.id, "user", request.message)
         
-        # Add email context for internal tracking (optional, but keep for consistency with previous logic)
-        user_context = f"\n[System Context: Customer Email is {request.customer_email}]"
-        user_content = request.message + user_context
+        # Fetch system message and recent history for AI
+        system_msg = db.query(Message).filter(Message.conversation_id == conv.id, Message.sender == "system").first()
+        recent_msgs = db.query(Message).filter(Message.conversation_id == conv.id, Message.sender != "system").order_by(Message.id.desc()).limit(15).all()
+        recent_msgs.reverse()
         
-        # Save and append user message
-        save_message(db, session_id, "user", user_content)
-        history.append({"role": "user", "content": user_content})
-        
-        # Initial call to LLM
+        # Ensure history doesn't start with a 'tool' message (invalid for OpenAI)
+        while recent_msgs and recent_msgs[0].sender == "tool":
+            recent_msgs.pop(0)
+
+        history = []
+        if system_msg:
+            history.append({"role": "system", "content": system_msg.message})
+            
+        for m in recent_msgs:
+            role = m.sender
+            if role == "agent": role = "assistant"
+            if role == "human": role = "assistant"
+            
+            msg_dict = {"role": role, "content": m.message or ""}
+            
+            if m.sender == "tool":
+                msg_dict["tool_call_id"] = m.tool_call_id
+                msg_dict["name"] = m.name
+            
+            if m.tool_calls_json:
+                msg_dict["tool_calls"] = json.loads(m.tool_calls_json)
+                if not msg_dict["content"]:
+                    msg_dict["content"] = None
+                
+            history.append(msg_dict)
+
+        # AI Logic
         response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=history,
@@ -132,71 +164,125 @@ async def chat(request: ChatRequest):
             tool_choice="auto"
         )
         
-        response_message = response.choices[0].message
-        tool_calls = response_message.tool_calls
+        ai_msg = response.choices[0].message
         
-        # Handle tool calls
-        if tool_calls:
-            # Save assistant message with tool calls
+        if ai_msg.tool_calls:
             tool_calls_list = []
-            for tc in tool_calls:
-                tool_calls_list.append({
-                    "id": tc.id,
-                    "type": tc.type,
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments
-                    }
-                })
+            for tc in ai_msg.tool_calls:
+                tool_calls_list.append({"id": tc.id, "type": tc.type, "function": {"name": tc.function.name, "arguments": tc.function.arguments}})
             
-            save_message(db, session_id, "assistant", content=response_message.content, tool_calls_json=json.dumps(tool_calls_list))
-            history.append(response_message)
+            save_msg(db, conv.id, "agent", ai_msg.content, tool_calls_json=json.dumps(tool_calls_list))
+            history.append(ai_msg)
             
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                function_args = json.loads(tool_call.function.arguments)
+            for tc in ai_msg.tool_calls:
+                args = json.loads(tc.function.arguments)
+                # Inject session_id for create_support_ticket
+                if tc.function.name == "create_support_ticket":
+                    args["conversation_id"] = conv.id
+                if tc.function.name == "get_order_details" and "email" not in args:
+                    args["email"] = request.customer_email
                 
-                if function_name == "get_order_details" and "email" not in function_args:
-                    function_args["email"] = request.customer_email
-                
-                print(f"Calling tool: {function_name} with {function_args}")
-                tool_response = tools.call_tool(function_name, function_args)
-                
-                # Save and append tool response
-                tool_content = json.dumps(tool_response)
-                save_message(db, session_id, "tool", content=tool_content, tool_call_id=tool_call.id, name=function_name)
-                
-                history.append({
-                    "tool_call_id": tool_call.id,
-                    "role": "tool",
-                    "name": function_name,
-                    "content": tool_content
-                })
+                tool_out = tools.call_tool(tc.function.name, args)
+                save_msg(db, conv.id, "tool", json.dumps(tool_out), tool_call_id=tc.id, name=tc.function.name)
+                history.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name, "content": json.dumps(tool_out)})
             
-            # Get final response from LLM
-            second_response = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=history
-            )
-            final_message = second_response.choices[0].message.content
-            save_message(db, session_id, "assistant", final_message)
-            return ChatResponse(response=final_message, session_id=session_id)
-        
+            final_res = client.chat.completions.create(model=MODEL_NAME, messages=history)
+            final_text = final_res.choices[0].message.content
+            save_msg(db, conv.id, "agent", final_text)
+            update_analytics(db, conv.id, request.customer_email, tool_calls=len(ai_msg.tool_calls), escalated=(conv.status=="escalated"))
+            return ChatResponse(response=final_text, session_id=conv.id, status=conv.status)
         else:
-            final_message = response.choices[0].message.content
-            save_message(db, session_id, "assistant", final_message)
-            return ChatResponse(response=final_message, session_id=session_id)
+            save_msg(db, conv.id, "agent", ai_msg.content)
+            update_analytics(db, conv.id, request.customer_email)
+            return ChatResponse(response=ai_msg.content, session_id=conv.id, status=conv.status)
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Chat Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
 
+# --- Admin Endpoints ---
+
+@app.post("/admin/login")
+async def login(request: LoginRequest):
+    db = SessionLocal()
+    user = db.query(User).filter(User.username == request.username).first()
+    if not user or not pwd_context.verify(request.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_access_token(data={"sub": user.username})
+    return {"token": token}
+
+@app.get("/admin/conversations")
+async def list_conversations(current_user: str = Depends(get_current_user)):
+    db = SessionLocal()
+    return db.query(Conversation).order_by(Conversation.started_at.desc()).all()
+
+@app.get("/admin/conversations/{conv_id}/messages")
+async def get_messages(conv_id: str, current_user: str = Depends(get_current_user)):
+    db = SessionLocal()
+    return db.query(Message).filter(Message.conversation_id == conv_id).order_by(Message.timestamp.asc()).all()
+
+@app.post("/admin/conversations/{conv_id}/takeover")
+async def takeover(conv_id: str, current_user: str = Depends(get_current_user)):
+    db = SessionLocal()
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if conv:
+        conv.status = "escalated"
+        db.commit()
+    return {"status": "escalated"}
+
+@app.post("/admin/conversations/{conv_id}/reply")
+async def admin_reply(conv_id: str, reply: Dict[str, str], current_user: str = Depends(get_current_user)):
+    db = SessionLocal()
+    save_msg(db, conv_id, "human", reply["message"])
+    return {"status": "sent"}
+
+@app.get("/admin/tickets")
+async def list_tickets(current_user: str = Depends(get_current_user)):
+    db = SessionLocal()
+    return db.query(Ticket).all()
+
+@app.post("/admin/tickets/{ticket_id}/resolve")
+async def resolve_ticket(ticket_id: int, current_user: str = Depends(get_current_user)):
+    db = SessionLocal()
+    t = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    if t:
+        t.status = "resolved"
+        # Also close conversation if needed
+        conv = db.query(Conversation).filter(Conversation.id == t.conversation_id).first()
+        if conv: conv.status = "closed"
+        db.commit()
+    return {"status": "resolved"}
+
+@app.get("/admin/settings")
+async def get_settings(current_user: str = Depends(get_current_user)):
+    db = SessionLocal()
+    return db.query(StoreSettings).first()
+
+@app.post("/admin/settings")
+async def save_settings(new_settings: Dict[str, Any], current_user: str = Depends(get_current_user)):
+    db = SessionLocal()
+    s = db.query(StoreSettings).first()
+    if s:
+        s.return_days_policy = new_settings.get("return_days_policy", s.return_days_policy)
+        s.allow_order_cancel = new_settings.get("allow_order_cancel", s.allow_order_cancel)
+        s.tone = new_settings.get("tone", s.tone)
+        db.commit()
+    return {"status": "saved"}
+
+@app.get("/admin/analytics")
+async def get_analytics(current_user: str = Depends(get_current_user)):
+    db = SessionLocal()
+    total = db.query(Conversation).count()
+    escalated = db.query(Conversation).filter(Conversation.status == "escalated").count()
+    tickets = db.query(Ticket).count()
+    return {
+        "total_conversations": total,
+        "escalation_rate": (escalated / total * 100) if total > 0 else 0,
+        "total_tickets": tickets
+    }
+
 if __name__ == "__main__":
     import uvicorn
-    import traceback
-    try:
-        uvicorn.run(app, host="0.0.0.0", port=8000)
-    except Exception:
-        traceback.print_exc()
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,8 +1,7 @@
 import datetime
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
-import database
-from database import SessionLocal, Order, Product, Return, Store, SupportTicket
+from .database import SessionLocal, Order, Product, Return, Store, StoreSettings, Ticket, Conversation
 
 def get_db():
     return SessionLocal()
@@ -38,7 +37,6 @@ def get_order_details(order_id_or_tracking: str, email: str) -> Dict[str, Any]:
         return {"error": "Order ID or Tracking ID is required.", "status": "failed"}
     db = get_db()
     try:
-        # Search by Order ID OR Tracking ID
         order = db.query(Order).filter(
             (Order.id == order_id_or_tracking) | 
             (Order.tracking_id == order_id_or_tracking)
@@ -48,9 +46,8 @@ def get_order_details(order_id_or_tracking: str, email: str) -> Dict[str, Any]:
             return {"error": f"Order with ID or Tracking ID '{order_id_or_tracking}' not found.", "status": "not_found"}
         
         if order.customer_email.lower() != email.lower():
-            return {"error": "Account verification failed. You can only access orders linked to your email address.", "status": "unauthorized"}
+            return {"error": "Account verification failed.", "status": "unauthorized"}
         
-        # Get store info
         store = db.query(Store).filter(Store.id == order.store_id).first()
         
         return {
@@ -65,7 +62,7 @@ def get_order_details(order_id_or_tracking: str, email: str) -> Dict[str, Any]:
             "store_name": store.name if store else "Main Store"
         }
     except Exception as e:
-        return {"error": f"Database error while fetching order details: {str(e)}", "status": "error"}
+        return {"error": f"Database error: {str(e)}", "status": "error"}
     finally:
         db.close()
 
@@ -78,37 +75,36 @@ def check_return_eligibility(order_id_or_tracking: str) -> Dict[str, Any]:
         ).first()
         
         if not order:
-            return {"eligible": False, "reason": "Order not found in our system.", "status": "not_found"}
+            return {"eligible": False, "reason": "Order not found.", "status": "not_found"}
         
         if order.status != 'delivered':
-            return {"eligible": False, "reason": f"Order is currently '{order.status}'. Only delivered orders can be returned.", "status": "invalid_state"}
+            return {"eligible": False, "reason": f"Order status is '{order.status}'. Needs to be 'delivered'.", "status": "invalid_state"}
+        
+        # DYNAMIC POLICY: Read from StoreSettings
+        settings = db.query(StoreSettings).filter(StoreSettings.store_id == order.store_id).first()
+        policy_days = settings.return_days_policy if settings else 7
         
         if not order.delivery_date:
-            return {"eligible": False, "reason": "Delivery date record missing. Please contact support.", "status": "data_error"}
-        
-        # Get store policy
-        store = db.query(Store).filter(Store.id == order.store_id).first()
-        policy_days = store.return_days_policy if store else 7
+            return {"eligible": False, "reason": "Delivery date missing.", "status": "data_error"}
         
         try:
             delivery_date = datetime.date.fromisoformat(order.delivery_date)
         except ValueError:
-            return {"eligible": False, "reason": "Invalid delivery date format.", "status": "data_error"}
+            return {"eligible": False, "reason": "Invalid date format.", "status": "data_error"}
             
         today = datetime.date.today()
         days_since_delivery = (today - delivery_date).days
         
         if days_since_delivery > policy_days:
-            return {"eligible": False, "reason": f"Return window closed. It has been {days_since_delivery} days since delivery (Policy limit: {policy_days} days).", "status": "expired"}
+            return {"eligible": False, "reason": f"Return window closed ({days_since_delivery} days since delivery, policy is {policy_days} days).", "status": "expired"}
         
-        # Check for existing return request
         existing_return = db.query(Return).filter(Return.order_id == order.id).first()
         if existing_return:
-            return {"eligible": False, "reason": f"A return request already exists (Current status: {existing_return.status}).", "status": "duplicate"}
+            return {"eligible": False, "reason": "Return already requested.", "status": "duplicate"}
         
-        return {"eligible": True, "reason": "Your order is eligible for a return.", "status": "success"}
+        return {"eligible": True, "reason": "Eligible for return.", "status": "success", "policy_limit": policy_days}
     except Exception as e:
-        return {"eligible": False, "reason": f"System error checking eligibility: {str(e)}", "status": "error"}
+        return {"eligible": False, "reason": f"System error: {str(e)}", "status": "error"}
     finally:
         db.close()
 
@@ -121,48 +117,37 @@ def cancel_order(order_id_or_tracking: str) -> Dict[str, Any]:
         ).first()
         
         if not order:
-            return {"error": "Order not found."}
+            return {"error": "Order not found.", "status": "not_found"}
         
+        # DYNAMIC SETTING: Check if cancel is allowed
+        settings = db.query(StoreSettings).filter(StoreSettings.store_id == order.store_id).first()
+        if settings and not settings.allow_order_cancel:
+            return {"error": "Cancellations are disabled for this store. Please contact support.", "status": "disabled"}
+
         if order.status != 'processing':
-            return {"error": f"Order cannot be cancelled because its status is '{order.status}'. Only 'processing' orders can be cancelled."}
+            return {"error": f"Cannot cancel order in '{order.status}' status.", "status": "invalid_state"}
         
         order.status = 'cancelled'
         db.commit()
-        
-        return {"success": True, "message": f"Order {order.id} has been successfully cancelled."}
+        return {"success": True, "message": f"Order {order.id} cancelled.", "status": "success"}
     except Exception as e:
         db.rollback()
-        return {"error": f"Failed to cancel order: {str(e)}"}
+        return {"error": f"Failed: {str(e)}", "status": "error"}
     finally:
         db.close()
 
-def get_product_info(query: str) -> Dict[str, Any]:
+def create_support_ticket(conversation_id: str, email: str, reason: str) -> Dict[str, Any]:
     db = get_db()
     try:
-        # Search by ID or Name
-        product = db.query(Product).filter((Product.id == query) | (Product.name.ilike(f"%{query}%"))).first()
-        
-        if not product:
-            return {"error": "Product not found."}
-        
-        return {
-            "id": product.id,
-            "name": product.name,
-            "description": product.description,
-            "price": product.price,
-            "stock": product.stock,
-            "store_id": product.store_id
-        }
-    finally:
-        db.close()
-
-def create_support_ticket(email: str, reason: str, conversation_summary: str) -> Dict[str, Any]:
-    db = get_db()
-    try:
-        ticket = SupportTicket(
+        # Update conversation status to escalated
+        conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+        if conv:
+            conv.status = "escalated"
+            
+        ticket = Ticket(
+            conversation_id=conversation_id,
             customer_email=email,
             reason=reason,
-            conversation_summary=conversation_summary,
             status="open"
         )
         db.add(ticket)
@@ -171,26 +156,25 @@ def create_support_ticket(email: str, reason: str, conversation_summary: str) ->
         return {
             "success": True,
             "ticket_id": ticket.id,
-            "message": f"Support ticket #{ticket.id} has been created. A human agent will review your case shortly."
+            "message": "A support ticket has been created and a human agent will take over shortly."
         }
     except Exception as e:
         db.rollback()
-        return {"error": f"Failed to create support ticket: {str(e)}"}
+        return {"error": f"Failed: {str(e)}"}
     finally:
         db.close()
 
-# Tool definitions for OpenAI function calling
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "get_order_details",
-            "description": "Get status, dates, amount, address, and tracking for a specific order. Accepts Order ID or Tracking ID.",
+            "description": "Get order details. Requires email for verification.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "order_id_or_tracking": {"type": "string", "description": "The ID of the order or the Tracking ID."},
-                    "email": {"type": "string", "description": "The customer's email address."}
+                    "order_id_or_tracking": {"type": "string"},
+                    "email": {"type": "string"}
                 },
                 "required": ["order_id_or_tracking", "email"]
             }
@@ -200,11 +184,11 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "check_return_eligibility",
-            "description": "Check if an order is eligible for a return. Accepts Order ID or Tracking ID.",
+            "description": "Check if an order is eligible for return based on store policy.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "order_id_or_tracking": {"type": "string", "description": "The ID of the order or the Tracking ID."}
+                    "order_id_or_tracking": {"type": "string"}
                 },
                 "required": ["order_id_or_tracking"]
             }
@@ -214,11 +198,11 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "cancel_order",
-            "description": "Cancel an order if it is still in 'processing'. Accepts Order ID or Tracking ID.",
+            "description": "Cancel an order if allowed and in processing status.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "order_id_or_tracking": {"type": "string", "description": "The ID of the order or the Tracking ID."}
+                    "order_id_or_tracking": {"type": "string"}
                 },
                 "required": ["order_id_or_tracking"]
             }
@@ -227,26 +211,12 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "get_product_info",
-            "description": "Get details about a product including description, price, stock levels, and store ID.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The product ID or Name to search for."}
-                },
-                "required": ["query"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "list_customer_orders",
-            "description": "List all order IDs, status, date, and amount for a given customer email.",
+            "description": "List all orders for a customer email.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "email": {"type": "string", "description": "The customer's email address."}
+                    "email": {"type": "string"}
                 },
                 "required": ["email"]
             }
@@ -256,31 +226,24 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_support_ticket",
-            "description": "Escalate the issue to a human agent by creating a support ticket. Use this when the customer is angry, a refund is outside policy, there's a tool error, or fraud is suspected.",
+            "description": "Create a support ticket for human escalation.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "email": {"type": "string", "description": "The customer's email address."},
-                    "reason": {"type": "string", "description": "The reason for escalation (e.g., 'Angry customer', 'Refund outside policy', 'Fraud suspicion')."},
-                    "conversation_summary": {"type": "string", "description": "A brief summary of the conversation so far for the human agent."}
+                    "conversation_id": {"type": "string"},
+                    "email": {"type": "string"},
+                    "reason": {"type": "string"}
                 },
-                "required": ["email", "reason", "conversation_summary"]
+                "required": ["conversation_id", "email", "reason"]
             }
         }
     }
 ]
 
 def call_tool(name: str, args: Dict[str, Any]) -> Any:
-    if name == "get_order_details":
-        return get_order_details(**args)
-    elif name == "check_return_eligibility":
-        return check_return_eligibility(**args)
-    elif name == "cancel_order":
-        return cancel_order(**args)
-    elif name == "get_product_info":
-        return get_product_info(**args)
-    elif name == "list_customer_orders":
-        return list_customer_orders(**args)
-    elif name == "create_support_ticket":
-        return create_support_ticket(**args)
+    if name == "get_order_details": return get_order_details(**args)
+    if name == "check_return_eligibility": return check_return_eligibility(**args)
+    if name == "cancel_order": return cancel_order(**args)
+    if name == "list_customer_orders": return list_customer_orders(**args)
+    if name == "create_support_ticket": return create_support_ticket(**args)
     return {"error": f"Tool {name} not found."}

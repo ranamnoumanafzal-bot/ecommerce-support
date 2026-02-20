@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Integer, Float, Text, ForeignKey, DateTime
+from sqlalchemy import create_engine, Column, String, Integer, Float, Text, ForeignKey, DateTime, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 import os
@@ -8,10 +8,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # If DATABASE_URL is not set, default to SQLite for local development
-# Format for Postgres: postgresql://user:password@localhost:5432/dbname
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ecommerce.db")
 
-# For SQLite, we need to allow multi-threading
 engine = create_engine(
     DATABASE_URL, 
     connect_args={"check_same_thread": False, "timeout": 30} if DATABASE_URL.startswith("sqlite") else {"connect_timeout": 10},
@@ -25,11 +23,21 @@ class Store(Base):
     __tablename__ = "stores"
     id = Column(String, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    return_days_policy = Column(Integer, default=7)
     support_email = Column(String)
     
     products = relationship("Product", back_populates="store")
     orders = relationship("Order", back_populates="store")
+    settings = relationship("StoreSettings", back_populates="store", uselist=False)
+
+class StoreSettings(Base):
+    __tablename__ = "store_settings"
+    store_id = Column(String, ForeignKey("stores.id"), primary_key=True)
+    return_days_policy = Column(Integer, default=7)
+    allow_order_cancel = Column(Boolean, default=True)
+    tone = Column(String, default="friendly") # formal, friendly
+    escalation_threshold = Column(Integer, default=5) # e.g., max messages before suggesting escalation
+
+    store = relationship("Store", back_populates="settings")
 
 class Product(Base):
     __tablename__ = "products"
@@ -66,25 +74,60 @@ class Return(Base):
     
     order = relationship("Order", back_populates="returns")
 
-class ChatMessage(Base):
-    __tablename__ = "chat_messages"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String, index=True)
-    role = Column(String) # system, user, assistant, tool
-    content = Column(Text, nullable=True)
-    tool_call_id = Column(String, nullable=True)
-    name = Column(String, nullable=True) # For tool role
-    tool_calls_json = Column(Text, nullable=True) # For assistant role with tool calls
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+class Conversation(Base):
+    __tablename__ = "conversations"
+    id = Column(String, primary_key=True, index=True)
+    customer_email = Column(String, index=True)
+    channel = Column(String, default="web")
+    started_at = Column(DateTime, default=datetime.datetime.utcnow)
+    status = Column(String, default="open") # open, escalated, closed
+    
+    messages = relationship("Message", back_populates="conversation")
+    tickets = relationship("Ticket", back_populates="conversation")
 
-class SupportTicket(Base):
-    __tablename__ = "support_tickets"
+class Message(Base):
+    __tablename__ = "messages"
     id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(String, ForeignKey("conversations.id"))
+    sender = Column(String) # user, agent, human, system
+    message = Column(Text)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    # Fields for tool integration (storing tool outputs/calls)
+    tool_call_id = Column(String, nullable=True)
+    name = Column(String, nullable=True)
+    tool_calls_json = Column(Text, nullable=True)
+
+    conversation = relationship("Conversation", back_populates="messages")
+
+class Ticket(Base):
+    __tablename__ = "tickets"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(String, ForeignKey("conversations.id"))
     customer_email = Column(String, index=True)
     reason = Column(String)
-    conversation_summary = Column(Text)
-    status = Column(String, default="open") # open, in_progress, resolved
+    status = Column(String, default="open") # open, resolved
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    conversation = relationship("Conversation", back_populates="tickets")
+
+class ConversationAnalytics(Base):
+    __tablename__ = "conversation_analytics"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String, unique=True, index=True)
+    customer_email = Column(String, index=True)
+    intent = Column(String, nullable=True)
+    tool_calls_count = Column(Integer, default=0)
+    message_count = Column(Integer, default=0)
+    was_escalated = Column(Boolean, default=False)
+    resolution_type = Column(String, default="pending")
+    last_updated = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+# Admin User table for authentication
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
 
 def get_db():
     db = SessionLocal()
