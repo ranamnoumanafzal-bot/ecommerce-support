@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Support Agent - Store</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="app-container">
+        <div class="build-label">Building: AI Customer Support Agent (Multi-Channel)</div>
+        <header>
+            <div class="logo">
+                <span class="icon">🤖</span>
+                <h1>EcommerceSupportAgent</h1>
+            </div>
+            <div class="user-info">
+                <input type="email" id="customer-email" placeholder="Enter your email" value="user@example.com">
+            </div>
+        </header>
+
+        <main class="chat-wrapper">
+            <div id="chat-display" class="chat-display">
+                <div class="message assistant">
+                    <div class="bubble">
+                        Hello! I'm your AI support assistant. How can I help you today?
+                        You can ask about your orders, product info, or return eligibility.
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <div class="input-container">
+                    <input type="text" id="user-input" placeholder="Type your message here..." autocomplete="off">
+                    <button id="send-btn">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                            <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+
+</html>
