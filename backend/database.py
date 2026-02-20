@@ -14,7 +14,9 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ecommerce.db")
 # For SQLite, we need to allow multi-threading
 engine = create_engine(
     DATABASE_URL, 
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+    connect_args={"check_same_thread": False, "timeout": 30} if DATABASE_URL.startswith("sqlite") else {"connect_timeout": 10},
+    pool_pre_ping=True,
+    pool_recycle=3600
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

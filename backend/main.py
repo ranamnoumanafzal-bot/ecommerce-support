@@ -77,8 +77,12 @@ def save_message(db, session_id, role, content=None, tool_call_id=None, name=Non
         name=name,
         tool_calls_json=tool_calls_json
     )
-    db.add(msg)
-    db.commit()
+    try:
+        db.add(msg)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Failed to save message to session {session_id}: {e}")
 
 def get_session_messages(db, session_id, limit=10):
     messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.id.desc()).limit(limit).all()

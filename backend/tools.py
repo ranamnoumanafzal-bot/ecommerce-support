@@ -8,13 +8,16 @@ def get_db():
     return SessionLocal()
 
 def list_customer_orders(email: str) -> Dict[str, Any]:
+    if not email or "@" not in email:
+        return {"error": "Invalid email format provided.", "status": "failed"}
     db = get_db()
     try:
         orders = db.query(Order).filter(Order.customer_email == email).all()
         if not orders:
-            return {"error": "No orders found for this email address."}
+            return {"error": f"No orders found for '{email}'.", "status": "not_found"}
         
         return {
+            "status": "success",
             "orders": [
                 {
                     "order_id": o.id, 
@@ -25,10 +28,14 @@ def list_customer_orders(email: str) -> Dict[str, Any]:
                 for o in orders
             ]
         }
+    except Exception as e:
+        return {"error": f"Database error while listing orders: {str(e)}", "status": "error"}
     finally:
         db.close()
 
 def get_order_details(order_id_or_tracking: str, email: str) -> Dict[str, Any]:
+    if not order_id_or_tracking:
+        return {"error": "Order ID or Tracking ID is required.", "status": "failed"}
     db = get_db()
     try:
         # Search by Order ID OR Tracking ID
@@ -38,24 +45,27 @@ def get_order_details(order_id_or_tracking: str, email: str) -> Dict[str, Any]:
         ).first()
         
         if not order:
-            return {"error": f"Order with ID or Tracking ID '{order_id_or_tracking}' not found."}
+            return {"error": f"Order with ID or Tracking ID '{order_id_or_tracking}' not found.", "status": "not_found"}
         
         if order.customer_email.lower() != email.lower():
-            return {"error": "Verification failed. This order does not belong to the provided email."}
+            return {"error": "Account verification failed. You can only access orders linked to your email address.", "status": "unauthorized"}
         
         # Get store info
         store = db.query(Store).filter(Store.id == order.store_id).first()
         
         return {
+            "status": "success",
             "order_id": order.id,
-            "status": order.status,
+            "status_label": order.status,
             "order_date": order.order_date,
             "delivery_date": order.delivery_date,
             "total_amount": order.total_amount,
             "shipping_address": order.shipping_address,
             "tracking_id": order.tracking_id,
-            "store_name": store.name if store else "N/A"
+            "store_name": store.name if store else "Main Store"
         }
+    except Exception as e:
+        return {"error": f"Database error while fetching order details: {str(e)}", "status": "error"}
     finally:
         db.close()
 
@@ -68,31 +78,37 @@ def check_return_eligibility(order_id_or_tracking: str) -> Dict[str, Any]:
         ).first()
         
         if not order:
-            return {"eligible": False, "reason": "Order not found."}
+            return {"eligible": False, "reason": "Order not found in our system.", "status": "not_found"}
         
         if order.status != 'delivered':
-            return {"eligible": False, "reason": f"Order status is '{order.status}'. It must be 'delivered' for a return."}
+            return {"eligible": False, "reason": f"Order is currently '{order.status}'. Only delivered orders can be returned.", "status": "invalid_state"}
         
         if not order.delivery_date:
-            return {"eligible": False, "reason": "Delivery date not recorded."}
+            return {"eligible": False, "reason": "Delivery date record missing. Please contact support.", "status": "data_error"}
         
         # Get store policy
         store = db.query(Store).filter(Store.id == order.store_id).first()
         policy_days = store.return_days_policy if store else 7
         
-        delivery_date = datetime.date.fromisoformat(order.delivery_date)
+        try:
+            delivery_date = datetime.date.fromisoformat(order.delivery_date)
+        except ValueError:
+            return {"eligible": False, "reason": "Invalid delivery date format.", "status": "data_error"}
+            
         today = datetime.date.today()
         days_since_delivery = (today - delivery_date).days
         
         if days_since_delivery > policy_days:
-            return {"eligible": False, "reason": f"Return window passed. It has been {days_since_delivery} days since delivery (limit for this store is {policy_days} days)."}
+            return {"eligible": False, "reason": f"Return window closed. It has been {days_since_delivery} days since delivery (Policy limit: {policy_days} days).", "status": "expired"}
         
         # Check for existing return request
         existing_return = db.query(Return).filter(Return.order_id == order.id).first()
         if existing_return:
-            return {"eligible": False, "reason": f"A return request already exists for this order (Status: {existing_return.status})."}
+            return {"eligible": False, "reason": f"A return request already exists (Current status: {existing_return.status}).", "status": "duplicate"}
         
-        return {"eligible": True, "reason": "Order is eligible for return."}
+        return {"eligible": True, "reason": "Your order is eligible for a return.", "status": "success"}
+    except Exception as e:
+        return {"eligible": False, "reason": f"System error checking eligibility: {str(e)}", "status": "error"}
     finally:
         db.close()
 
