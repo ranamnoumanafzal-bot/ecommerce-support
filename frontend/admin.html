@@ -179,6 +179,32 @@
         let token = localStorage.getItem('admin_token');
         let activeConvId = null;
 
+        // Centralized fetch wrapper to handle auth and errors
+        async function apiFetch(endpoint, options = {}) {
+            if (!options.headers) options.headers = {};
+            if (token) options.headers['Authorization'] = `Bearer ${token}`;
+
+            try {
+                const res = await fetch(`${API_BASE}${endpoint}`, options);
+                if (res.status === 401) {
+                    console.error("Unauthorized access - redirecting to login");
+                    logout();
+                    return null;
+                }
+                const data = await res.json();
+                if (!res.ok) {
+                    console.error(`API Error on ${endpoint}:`, data);
+                    alert(`Error: ${data.detail || 'Something went wrong'}`);
+                    return null;
+                }
+                return data;
+            } catch (err) {
+                console.error(`Network Error on ${endpoint}:`, err);
+                alert("Connection error. Is the backend running?");
+                return null;
+            }
+        }
+
         if (token) showDashboard();
 
         async function login() {
@@ -222,16 +248,16 @@
         }
 
         async function loadAnalytics() {
-            const res = await fetch(`${API_BASE}/admin/analytics`, { headers: { 'Authorization': `Bearer ${token}` } });
-            const data = await res.json();
-            stat_total_convs.innerText = data.total_conversations;
-            stat_escalation_rate.innerText = data.escalation_rate.toFixed(1) + "%";
-            stat_total_tickets.innerText = data.total_tickets;
+            const data = await apiFetch('/admin/analytics');
+            if (!data) return;
+            document.getElementById('stat-total-convs').innerText = data.total_conversations;
+            document.getElementById('stat-escalation-rate').innerText = data.escalation_rate.toFixed(1) + "%";
+            document.getElementById('stat-total-tickets').innerText = data.total_tickets;
         }
 
         async function loadConversations() {
-            const res = await fetch(`${API_BASE}/admin/conversations`, { headers: { 'Authorization': `Bearer ${token}` } });
-            const data = await res.json();
+            const data = await apiFetch('/admin/conversations');
+            if (!data) return;
             const body = document.getElementById('conv-table-body');
             body.innerHTML = data.map(c => `
                 <tr class="border-b border-slate-700/50 hover:bg-slate-700/20">
@@ -251,8 +277,8 @@
 
         async function viewChat(convId) {
             activeConvId = convId;
-            const res = await fetch(`${API_BASE}/admin/conversations/${convId}/messages`, { headers: { 'Authorization': `Bearer ${token}` } });
-            const msgs = await res.json();
+            const msgs = await apiFetch(`/admin/conversations/${convId}/messages`);
+            if (!msgs) return;
             const hist = document.getElementById('chat-history');
             hist.innerHTML = msgs.map(m => `
                 <div class="flex flex-col ${m.sender === 'user' ? 'items-start' : 'items-end'}">
@@ -273,31 +299,28 @@
         async function sendReply() {
             const msg = document.getElementById('human-reply').value;
             if (!msg) return;
-            const res = await fetch(`${API_BASE}/admin/conversations/${activeConvId}/reply`, {
+            const data = await apiFetch(`/admin/conversations/${activeConvId}/reply`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: msg })
             });
-            if (res.ok) {
+            if (data) {
                 document.getElementById('human-reply').value = '';
                 viewChat(activeConvId);
             }
         }
 
         async function takeover() {
-            const res = await fetch(`${API_BASE}/admin/conversations/${activeConvId}/takeover`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (res.ok) {
+            const data = await apiFetch(`/admin/conversations/${activeConvId}/takeover`, { method: 'POST' });
+            if (data) {
                 alert("Agent stopped. You are now in full control.");
                 loadConversations();
             }
         }
 
         async function loadTickets() {
-            const res = await fetch(`${API_BASE}/admin/tickets`, { headers: { 'Authorization': `Bearer ${token}` } });
-            const data = await res.json();
+            const data = await apiFetch('/admin/tickets');
+            if (!data) return;
             const body = document.getElementById('ticket-table-body');
             body.innerHTML = data.map(t => `
                 <tr class="border-b border-slate-700/50 hover:bg-slate-700/20">
@@ -308,40 +331,38 @@
                             ${t.status.toUpperCase()}
                         </span>
                     </td>
-                    <td class="p-4">
-                        ${t.status === 'open' ? `<button onclick="resolveTicket(${t.id})" class="text-green-400 hover:text-green-300">Resolve</button>` : '---'}
+                    <td class="p-4 flex space-x-2">
+                        <button onclick="viewChat('${t.conversation_id}')" class="text-blue-400 hover:text-blue-300">View History</button>
+                        ${t.status === 'open' ? `<button onclick="resolveTicket(${t.id})" class="text-green-400 hover:text-green-300">Resolve</button>` : ''}
                     </td>
                 </tr>
             `).join('');
         }
 
         async function resolveTicket(id) {
-            await fetch(`${API_BASE}/admin/tickets/${id}/resolve`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            loadTickets();
+            const data = await apiFetch(`/admin/tickets/${id}/resolve`, { method: 'POST' });
+            if (data) loadTickets();
         }
 
         async function loadSettings() {
-            const res = await fetch(`${API_BASE}/admin/settings`, { headers: { 'Authorization': `Bearer ${token}` } });
-            const data = await res.json();
+            const data = await apiFetch('/admin/settings');
+            if (!data) return;
             document.getElementById('setting-return-days').value = data.return_days_policy;
             document.getElementById('setting-allow-cancel').checked = data.allow_order_cancel;
             document.getElementById('setting-tone').value = data.tone;
         }
 
         async function saveSettings() {
-            const res = await fetch(`${API_BASE}/admin/settings`, {
+            const data = await apiFetch('/admin/settings', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     return_days_policy: parseInt(document.getElementById('setting-return-days').value),
                     allow_order_cancel: document.getElementById('setting-allow-cancel').checked,
                     tone: document.getElementById('setting-tone').value
                 })
             });
-            if (res.ok) alert("Settings saved successfully!");
+            if (data) alert("Settings saved successfully!");
         }
     </script>
 </body>

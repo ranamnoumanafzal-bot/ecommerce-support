@@ -85,6 +85,51 @@ header {
     -webkit-text-fill-color: transparent;
 }
 
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    margin-left: 10px;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #94a3b8;
+    box-shadow: 0 0 5px #94a3b8;
+}
+
+.status-text {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.status-indicator.online .status-dot {
+    background: #10b981;
+    box-shadow: 0 0 8px #10b981;
+}
+
+.status-indicator.online .status-text {
+    color: #10b981;
+}
+
+.status-indicator.offline .status-dot {
+    background: #ef4444;
+    box-shadow: 0 0 8px #ef4444;
+}
+
+.status-indicator.offline .status-text {
+    color: #ef4444;
+}
+
 .user-info input {
     background: rgba(0, 0, 0, 0.3);
     border: 1px solid rgba(59, 130, 246, 0.3);

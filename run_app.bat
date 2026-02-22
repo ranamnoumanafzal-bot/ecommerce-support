@@ -19,7 +19,7 @@ python init_db.py
 
 echo Starting backend (this will open in a new window)...
 :: 'start' first quoted string is the title. 
-start "Ecom-Backend" cmd /k "python backend/main.py"
+start "Ecom-Backend" cmd /k "python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000"
 
 echo Opening the chat interface...
 :: Wait a few seconds for server to boot

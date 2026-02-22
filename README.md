@@ -7,6 +7,14 @@ A web-based AI support agent built with FastAPI and OpenAI.
 - **Check Return Eligibility:** Automatic check based on delivery date (7-day window).
 - **Cancel Order:** Cancel orders that are still in 'processing'.
 - **Product Info:** Get descriptions, price, and stock for products.
+- **Security Guardrails:** Multi-layer protection against prompt injection, sensitive data leakage, and automated escalation for negative customer sentiment.
+
+## Guardrail Architecture
+1. **Input Guardrails:** Pattern detection for prompt injection and suspicious commands.
+2. **System Prompt Guardrails:** Strict behavioral rules embedded in the agent's core instructions.
+3. **Tool Guardrails:** Deterministic business logic in tools that overrides AI decisions.
+4. **Output Guardrails:** Filtering of sensitive technical data before it reaches the user.
+5. **Escalation Guardrails:** Automatic handoff to human agents based on sentiment and message volume.
 
 ## Setup
 1. **Initialize Database:**

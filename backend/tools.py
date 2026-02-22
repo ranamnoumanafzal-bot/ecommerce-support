@@ -174,9 +174,9 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "order_id_or_tracking": {"type": "string"},
-                    "email": {"type": "string"}
+                    "email": {"type": "string", "description": "Auto-filled by system"}
                 },
-                "required": ["order_id_or_tracking", "email"]
+                "required": ["order_id_or_tracking"]
             }
         }
     },
@@ -216,9 +216,9 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "email": {"type": "string"}
+                    "email": {"type": "string", "description": "Auto-filled by system"}
                 },
-                "required": ["email"]
+                "required": []
             }
         }
     },
@@ -231,10 +231,10 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "conversation_id": {"type": "string"},
-                    "email": {"type": "string"},
+                    "email": {"type": "string", "description": "Auto-filled by system"},
                     "reason": {"type": "string"}
                 },
-                "required": ["conversation_id", "email", "reason"]
+                "required": ["reason"]
             }
         }
     }
