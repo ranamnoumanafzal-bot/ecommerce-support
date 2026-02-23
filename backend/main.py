@@ -1,24 +1,21 @@
 from fastapi import FastAPI, HTTPException, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import os
 import json
 import datetime
-import jwt
+from jose import JWTError, jwt
 from passlib.context import CryptContext
-from openai import OpenAI
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
-try:
-    from .database import SessionLocal, Conversation, Message, Ticket, StoreSettings, User, ConversationAnalytics
-    from . import tools
-    from . import guardrails
-except ImportError:
-    from database import SessionLocal, Conversation, Message, Ticket, StoreSettings, User, ConversationAnalytics
-    import tools
-    import guardrails
+from .database import SessionLocal, Conversation, Message, Ticket, StoreSettings, User, ConversationAnalytics
+from . import tools
+from . import guardrails
+from . import logger
 
 load_dotenv()
 
@@ -39,7 +36,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = OpenAI(
+# Serve Frontend
+app.mount("/frontend", StaticFiles(directory="frontend"), name="frontend")
+
+@app.get("/")
+async def serve_index():
+    from fastapi.responses import FileResponse
+    return FileResponse("frontend/index.html")
+
+client = AsyncOpenAI(
     base_url="https://router.huggingface.co/v1/",
     api_key=os.getenv("HUGGINGFACE_API_KEY")
 )
@@ -57,22 +62,16 @@ class ChatResponse(BaseModel):
     status: str # open, escalated, closed
 
 class LoginRequest(BaseModel):
-    username: str
+    email: str
     password: str
 
-# --- Auth Helpers ---
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.datetime.utcnow() + datetime.timedelta(hours=24)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+class OTPRequest(BaseModel):
+    phone: str
+    email: str
 
-def get_current_user(auth: HTTPAuthorizationCredentials = Security(security)):
-    try:
-        payload = jwt.decode(auth.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload.get("sub")
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+class OTPVerifyRequest(BaseModel):
+    phone: str
+    otp_code: str
 
 # --- Helper Functions ---
 def get_db():
@@ -81,6 +80,38 @@ def get_db():
         yield db
     finally:
         db.close()
+
+# --- Auth Helpers ---
+def create_access_token(data: dict, expires_delta: Optional[datetime.timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+    to_encode.update({"exp": expire})
+    # Use jose to encode with HS256
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def get_current_user(auth: HTTPAuthorizationCredentials = Security(security), db: SessionLocal = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(auth.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        user_email: str = payload.get("sub")
+        if user_email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+        
+    user = db.query(User).filter(User.email == user_email).first()
+    if user is None:
+        raise credentials_exception
+    return user
+
+# --- Helper Functions ---
 
 def save_msg(db, conv_id, sender, text, tool_call_id=None, name=None, tool_calls_json=None):
     msg = Message(
@@ -132,11 +163,12 @@ async def health_check():
     return {"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat()}
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, current_user: User = Depends(get_current_user)):
     db = SessionLocal()
     try:
         conv = db.query(Conversation).filter(Conversation.id == request.session_id).first()
         if not conv:
+            logger.log_system_event(f"New conversation started: {request.session_id}")
             conv = Conversation(id=request.session_id, customer_email=request.customer_email)
             db.add(conv)
             db.commit()
@@ -173,6 +205,7 @@ GUIDELINES:
             )
 
         # Save user message
+        logger.log_user_input(conv.id, request.message)
         save_msg(db, conv.id, "user", request.message)
         
         # Fetch system message and recent history for AI
@@ -207,7 +240,7 @@ GUIDELINES:
             history.append(msg_dict)
 
         # AI Logic
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=history,
             tools=tools.TOOLS,
@@ -239,7 +272,7 @@ GUIDELINES:
                 save_msg(db, conv.id, "tool", json.dumps(tool_out), tool_call_id=tc.id, name=tc.function.name)
                 history.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name, "content": json.dumps(tool_out)})
             
-            final_res = client.chat.completions.create(model=MODEL_NAME, messages=history)
+            final_res = await client.chat.completions.create(model=MODEL_NAME, messages=history)
             final_text = final_res.choices[0].message.content
             
             # OUTPUT GUARDRAILS (Layer 4)
@@ -277,13 +310,13 @@ GUIDELINES:
             return ChatResponse(response=final_text, session_id=conv.id, status=conv.status)
 
     except Exception as e:
-        print(f"Chat Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.log_api_error("/chat", str(e), {"session_id": request.session_id, "email": request.customer_email})
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
     finally:
         db.close()
 
 @app.get("/chat/history")
-async def get_chat_history(session_id: str, email: str):
+async def get_chat_history(session_id: str, email: str, current_user: User = Depends(get_current_user)):
     db = SessionLocal()
     try:
         conv = db.query(Conversation).filter(Conversation.id == session_id).first()
@@ -302,22 +335,60 @@ async def get_chat_history(session_id: str, email: str):
             role = m.sender
             if role == "agent": role = "assistant"
             if role == "human": role = "assistant"
-            history.append({"role": role, "content": m.message})
+            history.append({"id": m.id, "role": role, "content": m.message})
             
         return history
     finally:
         db.close()
 
-# --- Admin Endpoints ---
+# --- Auth Endpoints ---
+
+@app.post("/login")
+async def login(request: LoginRequest, db: SessionLocal = Depends(get_db)):
+    """Professional Login Endpoint using Email"""
+    user = db.query(User).filter(User.email == request.email).first()
+    if not user or not pwd_context.verify(request.password, user.hashed_password):
+        logger.log_api_error("/login", "Invalid credentials", {"email": request.email})
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    # Create token with 1 hour expiry
+    access_token = create_access_token(data={"sub": user.email})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.post("/request-otp")
+async def request_otp(request: OTPRequest, db: SessionLocal = Depends(get_db)):
+    """Social Media / WhatsApp Support: Request OTP to link phone"""
+    user = db.query(User).filter(User.email == request.email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Generate simple 6-digit OTP (in prod, send via Twilio/WhatsApp)
+    import random
+    otp = str(random.randint(100000, 999999))
+    user.phone = request.phone
+    user.otp_code = otp
+    db.commit()
+    
+    logger.log_system_event(f"OTP {otp} generated for {request.phone}")
+    return {"message": "OTP sent to your phone (check logs)", "phone": request.phone}
+
+@app.post("/verify-otp")
+async def verify_otp(request: OTPVerifyRequest, db: SessionLocal = Depends(get_db)):
+    """Verify OTP and issue JWT token"""
+    user = db.query(User).filter(User.phone == request.phone).first()
+    if not user or user.otp_code != request.otp_code:
+        raise HTTPException(status_code=400, detail="Invalid OTP or phone")
+    
+    user.is_verified = True
+    user.otp_code = None # Clear OTP after use
+    db.commit()
+    
+    access_token = create_access_token(data={"sub": user.email})
+    return {"access_token": access_token, "token_type": "bearer", "message": "Phone verified successfully"}
 
 @app.post("/admin/login")
-async def login(request: LoginRequest):
-    db = SessionLocal()
-    user = db.query(User).filter(User.username == request.username).first()
-    if not user or not pwd_context.verify(request.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_access_token(data={"sub": user.username})
-    return {"token": token}
+async def admin_login(request: LoginRequest, db: SessionLocal = Depends(get_db)):
+    return await login(request, db)
 
 @app.get("/admin/conversations")
 async def list_conversations(db: SessionLocal = Depends(get_db), current_user: str = Depends(get_current_user)):

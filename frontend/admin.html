@@ -208,14 +208,15 @@
         if (token) showDashboard();
 
         async function login() {
-            const res = await fetch(`${API_BASE}/admin/login`, {
+            const emailInput = document.getElementById('username'); // reused field for email
+            const res = await fetch(`${API_BASE}/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: username.value, password: password.value })
+                body: JSON.stringify({ email: emailInput.value, password: password.value })
             });
             if (res.ok) {
                 const data = await res.json();
-                token = data.token;
+                token = data.access_token;
                 localStorage.setItem('admin_token', token);
                 showDashboard();
             } else {

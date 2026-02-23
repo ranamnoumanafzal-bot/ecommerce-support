@@ -122,12 +122,16 @@ class ConversationAnalytics(Base):
     resolution_type = Column(String, default="pending")
     last_updated = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
-# Admin User table for authentication
+# User table for authentication
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    username = Column(String, unique=True, index=True)
-    hashed_password = Column(String)
+    username = Column(String, unique=True, index=True, nullable=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    phone = Column(String, unique=True, index=True, nullable=True)
+    otp_code = Column(String, nullable=True)
+    is_verified = Column(Boolean, default=False)
 
 def get_db():
     db = SessionLocal()

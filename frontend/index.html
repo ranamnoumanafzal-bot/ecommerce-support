@@ -23,8 +23,11 @@
                     <span class="status-text">Connecting...</span>
                 </div>
             </div>
-            <div class="user-info">
-                <input type="email" id="customer-email" placeholder="Enter your email" value="user@example.com">
+            <div class="user-info" id="auth-area">
+                <input type="email" id="customer-email" placeholder="Email" value="admin@example.com">
+                <input type="password" id="customer-pass" placeholder="Password" value="admin123">
+                <button id="login-btn" onclick="userLogin()">Login</button>
+                <div id="auth-status" class="status-indicator"></div>
             </div>
         </header>
 

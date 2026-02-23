@@ -31,8 +31,9 @@ def init_db():
 
         # Seed Admin User
         admin_user = User(
-            username="admin",
-            hashed_password=pwd_context.hash("admin123")
+            email="admin@example.com",
+            hashed_password=pwd_context.hash("admin123"),
+            is_verified=True
         )
         db.add(admin_user)
         

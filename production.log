@@ -1,0 +1,15 @@
+2026-02-23 07:34:34,447 - EcommerceAgent - INFO - System Event: New conversation started: session_c6o75atfd
+2026-02-23 07:34:34,610 - EcommerceAgent - INFO - User [session_c6o75atfd]: hi...
+2026-02-23 07:34:38,690 - httpx - INFO - HTTP Request: POST https://router.huggingface.co/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 08:44:38,549 - EcommerceAgent - ERROR - API Error at /login: Invalid credentials | Context: {'email': 'admin'}
+2026-02-23 08:44:38,964 - EcommerceAgent - ERROR - API Error at /login: Invalid credentials | Context: {'email': 'admin'}
+2026-02-23 08:45:07,714 - EcommerceAgent - INFO - System Event: New conversation started: session_i9b8l9phs
+2026-02-23 08:45:07,891 - EcommerceAgent - INFO - User [session_i9b8l9phs]: hi give me the details of my  order...
+2026-02-23 08:45:12,676 - httpx - INFO - HTTP Request: POST https://router.huggingface.co/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 08:45:18,104 - httpx - INFO - HTTP Request: POST https://router.huggingface.co/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 08:45:56,890 - EcommerceAgent - INFO - User [session_i9b8l9phs]: ok...
+2026-02-23 08:46:00,086 - httpx - INFO - HTTP Request: POST https://router.huggingface.co/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 08:46:22,071 - EcommerceAgent - ERROR - API Error at /login: Invalid credentials | Context: {'email': 'admin'}
+2026-02-23 08:47:58,161 - EcommerceAgent - INFO - User [session_i9b8l9phs]: you give me the support ticket...
+2026-02-23 08:48:03,073 - httpx - INFO - HTTP Request: POST https://router.huggingface.co/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 08:48:06,041 - httpx - INFO - HTTP Request: POST https://router.huggingface.co/v1/chat/completions "HTTP/1.1 200 OK"

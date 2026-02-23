@@ -9,6 +9,33 @@ const statusText = statusIndicator.querySelector('.status-text');
 
 let lastMessageCount = 0;
 let isPolling = false;
+let userToken = localStorage.getItem('user_token');
+const displayedMessageIds = new Set();
+
+async function userLogin() {
+    const email = document.getElementById('customer-email').value;
+    const password = document.getElementById('customer-pass').value;
+
+    try {
+        const response = await fetch('http://localhost:8000/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            userToken = data.access_token;
+            localStorage.setItem('user_token', userToken);
+            document.getElementById('auth-status').innerHTML = "✅ Logged In";
+            alert("Login Successful! You can now chat.");
+        } else {
+            alert("Login failed. Check credentials.");
+        }
+    } catch (err) {
+        alert("Login error: " + err.message);
+    }
+}
 
 async function checkConnection() {
     try {
@@ -38,19 +65,22 @@ async function pollMessages() {
     try {
         // We use the same chat endpoint or a new one to get history
         // For simplicity, let's add a quick history fetch in the background
-        const response = await fetch(`http://localhost:8000/chat/history?session_id=${sessionId}&email=${email}`);
+        const response = await fetch(`http://localhost:8000/chat/history?session_id=${sessionId}&email=${email}`, {
+            headers: {
+                'Authorization': `Bearer ${userToken}`
+            }
+        });
         if (response.ok) {
             const messages = await response.json();
-            if (messages.length > lastMessageCount) {
-                // New messages found!
-                const newMsgs = messages.slice(lastMessageCount);
-                newMsgs.forEach(m => {
+            messages.forEach(m => {
+                if (!displayedMessageIds.has(m.id)) {
                     if (m.role === 'assistant' || m.role === 'human') {
                         addMessage(m.content, 'assistant');
+                        displayedMessageIds.add(m.id);
                     }
-                });
-                lastMessageCount = messages.length;
-            }
+                }
+            });
+            lastMessageCount = messages.length;
         }
     } catch (error) {
         console.error("Polling error:", error);
@@ -81,6 +111,7 @@ async function sendMessage() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'Authorization': `Bearer ${userToken}`
             },
             body: JSON.stringify({
                 message: message,
@@ -93,9 +124,10 @@ async function sendMessage() {
         removeTypingIndicator(typingId);
 
         if (data.response) {
-            addMessage(data.response, 'assistant');
-            // Update the count so polling doesn't duplicate this
-            lastMessageCount++;
+            // Note: We don't have the ID from the direct response yet, 
+            // but the poller will fetch it. To be safe, let's trigger a poll
+            // immediately to register the ID without adding a duplicate.
+            await pollMessages();
         } else {
             addMessage("Sorry, I encountered an error. Please try again.", 'assistant');
         }

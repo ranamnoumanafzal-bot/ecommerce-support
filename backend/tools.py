@@ -1,7 +1,12 @@
 import datetime
 from typing import Optional, Dict, Any, List
+from functools import lru_cache
 from sqlalchemy.orm import Session
 from .database import SessionLocal, Order, Product, Return, Store, StoreSettings, Ticket, Conversation
+try:
+    from . import logger
+except ImportError:
+    import logger
 
 def get_db():
     return SessionLocal()
@@ -28,9 +33,16 @@ def list_customer_orders(email: str) -> Dict[str, Any]:
             ]
         }
     except Exception as e:
-        return {"error": f"Database error while listing orders: {str(e)}", "status": "error"}
+        logger.log_api_error("list_customer_orders", str(e), {"email": email})
+        return {"error": "A database error occurred.", "status": "error"}
     finally:
         db.close()
+
+@lru_cache(maxsize=100)
+def get_cached_order_details(order_id_or_tracking: str, email: str) -> Dict[str, Any]:
+    # This is a wrapper to allow caching of the result dictionary
+    # We call the main function from here
+    return get_order_details(order_id_or_tracking, email)
 
 def get_order_details(order_id_or_tracking: str, email: str) -> Dict[str, Any]:
     if not order_id_or_tracking:
@@ -62,7 +74,8 @@ def get_order_details(order_id_or_tracking: str, email: str) -> Dict[str, Any]:
             "store_name": store.name if store else "Main Store"
         }
     except Exception as e:
-        return {"error": f"Database error: {str(e)}", "status": "error"}
+        logger.log_api_error("get_order_details", str(e), {"order_id": order_id_or_tracking})
+        return {"error": "Internal system error.", "status": "error"}
     finally:
         db.close()
 
@@ -241,9 +254,14 @@ TOOLS = [
 ]
 
 def call_tool(name: str, args: Dict[str, Any]) -> Any:
-    if name == "get_order_details": return get_order_details(**args)
+    # Use cached version for order details to reduce DB load
+    if name == "get_order_details": 
+        return get_cached_order_details(**args)
     if name == "check_return_eligibility": return check_return_eligibility(**args)
-    if name == "cancel_order": return cancel_order(**args)
+    if name == "cancel_order": 
+        # Clear cache on mutation
+        get_cached_order_details.cache_clear()
+        return cancel_order(**args)
     if name == "list_customer_orders": return list_customer_orders(**args)
     if name == "create_support_ticket": return create_support_ticket(**args)
     return {"error": f"Tool {name} not found."}
