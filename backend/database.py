@@ -10,6 +10,10 @@ load_dotenv()
 # If DATABASE_URL is not set, default to SQLite for local development
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ecommerce.db")
 
+# Fix for Render/Heroku providing "postgres://" instead of "postgresql://"
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
 engine = create_engine(
     DATABASE_URL, 
     connect_args={"check_same_thread": False, "timeout": 30} if DATABASE_URL.startswith("sqlite") else {"connect_timeout": 10},
