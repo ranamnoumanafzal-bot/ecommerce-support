@@ -1,193 +1,77 @@
-import datetime
+import os
+import httpx
 from typing import Optional, Dict, Any, List
-from functools import lru_cache
-from sqlalchemy.orm import Session
-from .database import SessionLocal, Order, Product, Return, Store, StoreSettings, Ticket, Conversation
+from dotenv import load_dotenv
+
+load_dotenv()
+
 try:
     from . import logger
 except ImportError:
     import logger
 
-def get_db():
-    return SessionLocal()
+NODE_BACKEND_URL = os.getenv("NODE_BACKEND_URL", "http://localhost:5000/api/v1")
+API_KEY = os.getenv("AI_AGENT_API_KEY")
 
-def list_customer_orders(email: str) -> Dict[str, Any]:
-    if not email or "@" not in email:
-        return {"error": "Invalid email format provided.", "status": "failed"}
-    db = get_db()
-    try:
-        orders = db.query(Order).filter(Order.customer_email == email).all()
-        if not orders:
-            return {"error": f"No orders found for '{email}'.", "status": "not_found"}
-        
-        return {
-            "status": "success",
-            "orders": [
-                {
-                    "order_id": o.id, 
-                    "status": o.status, 
-                    "order_date": o.order_date,
-                    "total_amount": o.total_amount
-                }
-                for o in orders
-            ]
-        }
-    except Exception as e:
-        logger.log_api_error("list_customer_orders", str(e), {"email": email})
-        return {"error": "A database error occurred.", "status": "error"}
-    finally:
-        db.close()
-
-@lru_cache(maxsize=100)
-def get_cached_order_details(order_id_or_tracking: str, email: str) -> Dict[str, Any]:
-    # This is a wrapper to allow caching of the result dictionary
-    # We call the main function from here
-    return get_order_details(order_id_or_tracking, email)
-
-def get_order_details(order_id_or_tracking: str, email: str) -> Dict[str, Any]:
-    if not order_id_or_tracking:
-        return {"error": "Order ID or Tracking ID is required.", "status": "failed"}
-    db = get_db()
-    try:
-        order = db.query(Order).filter(
-            (Order.id == order_id_or_tracking) | 
-            (Order.tracking_id == order_id_or_tracking)
-        ).first()
-        
-        if not order:
-            return {"error": f"Order with ID or Tracking ID '{order_id_or_tracking}' not found.", "status": "not_found"}
-        
-        if order.customer_email.lower() != email.lower():
-            return {"error": "Account verification failed.", "status": "unauthorized"}
-        
-        store = db.query(Store).filter(Store.id == order.store_id).first()
-        
-        return {
-            "status": "success",
-            "order_id": order.id,
-            "status_label": order.status,
-            "order_date": order.order_date,
-            "delivery_date": order.delivery_date,
-            "total_amount": order.total_amount,
-            "shipping_address": order.shipping_address,
-            "tracking_id": order.tracking_id,
-            "store_name": store.name if store else "Main Store"
-        }
-    except Exception as e:
-        logger.log_api_error("get_order_details", str(e), {"order_id": order_id_or_tracking})
-        return {"error": "Internal system error.", "status": "error"}
-    finally:
-        db.close()
-
-def check_return_eligibility(order_id_or_tracking: str) -> Dict[str, Any]:
-    db = get_db()
-    try:
-        order = db.query(Order).filter(
-            (Order.id == order_id_or_tracking) | 
-            (Order.tracking_id == order_id_or_tracking)
-        ).first()
-        
-        if not order:
-            return {"eligible": False, "reason": "Order not found.", "status": "not_found"}
-        
-        if order.status != 'delivered':
-            return {"eligible": False, "reason": f"Order status is '{order.status}'. Needs to be 'delivered'.", "status": "invalid_state"}
-        
-        # DYNAMIC POLICY: Read from StoreSettings
-        settings = db.query(StoreSettings).filter(StoreSettings.store_id == order.store_id).first()
-        policy_days = settings.return_days_policy if settings else 7
-        
-        if not order.delivery_date:
-            return {"eligible": False, "reason": "Delivery date missing.", "status": "data_error"}
-        
+async def call_node_api(method: str, endpoint: str, params: Dict = None, data: Dict = None) -> Dict[str, Any]:
+    """Helper to call the MERN backend with security headers."""
+    headers = {
+        "x-api-key": API_KEY,
+        "Content-Type": "application/json"
+    }
+    url = f"{NODE_BACKEND_URL}{endpoint}"
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
         try:
-            delivery_date = datetime.date.fromisoformat(order.delivery_date)
-        except ValueError:
-            return {"eligible": False, "reason": "Invalid date format.", "status": "data_error"}
+            if method.upper() == "GET":
+                response = await client.get(url, params=params, headers=headers)
+            else:
+                response = await client.post(url, json=data, headers=headers)
             
-        today = datetime.date.today()
-        days_since_delivery = (today - delivery_date).days
-        
-        if days_since_delivery > policy_days:
-            return {"eligible": False, "reason": f"Return window closed ({days_since_delivery} days since delivery, policy is {policy_days} days).", "status": "expired"}
-        
-        existing_return = db.query(Return).filter(Return.order_id == order.id).first()
-        if existing_return:
-            return {"eligible": False, "reason": "Return already requested.", "status": "duplicate"}
-        
-        return {"eligible": True, "reason": "Eligible for return.", "status": "success", "policy_limit": policy_days}
-    except Exception as e:
-        return {"eligible": False, "reason": f"System error: {str(e)}", "status": "error"}
-    finally:
-        db.close()
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            return {"error": f"Backend API error: {e.response.text}", "status": "error"}
+        except Exception as e:
+            return {"error": f"Connection failed: {str(e)}", "status": "error"}
 
-def cancel_order(order_id_or_tracking: str) -> Dict[str, Any]:
-    db = get_db()
-    try:
-        order = db.query(Order).filter(
-            (Order.id == order_id_or_tracking) | 
-            (Order.tracking_id == order_id_or_tracking)
-        ).first()
-        
-        if not order:
-            return {"error": "Order not found.", "status": "not_found"}
-        
-        # DYNAMIC SETTING: Check if cancel is allowed
-        settings = db.query(StoreSettings).filter(StoreSettings.store_id == order.store_id).first()
-        if settings and not settings.allow_order_cancel:
-            return {"error": "Cancellations are disabled for this store. Please contact support.", "status": "disabled"}
+async def list_customer_orders(email: str) -> Dict[str, Any]:
+    if not email or "@" not in email:
+        return {"error": "Invalid email format.", "status": "failed"}
+    return await call_node_api("GET", "/orders", params={"email": email})
 
-        if order.status != 'processing':
-            return {"error": f"Cannot cancel order in '{order.status}' status.", "status": "invalid_state"}
-        
-        order.status = 'cancelled'
-        db.commit()
-        return {"success": True, "message": f"Order {order.id} cancelled.", "status": "success"}
-    except Exception as e:
-        db.rollback()
-        return {"error": f"Failed: {str(e)}", "status": "error"}
-    finally:
-        db.close()
+async def get_order_details(order_id_or_tracking: str, email: str) -> Dict[str, Any]:
+    if not order_id_or_tracking:
+        return {"error": "Order ID required.", "status": "failed"}
+    return await call_node_api("GET", f"/orders/{order_id_or_tracking}", params={"email": email})
 
-def create_support_ticket(conversation_id: str, email: str, reason: str) -> Dict[str, Any]:
-    db = get_db()
-    try:
-        # Update conversation status to escalated
-        conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
-        if conv:
-            conv.status = "escalated"
-            
-        ticket = Ticket(
-            conversation_id=conversation_id,
-            customer_email=email,
-            reason=reason,
-            status="open"
-        )
-        db.add(ticket)
-        db.commit()
-        db.refresh(ticket)
-        return {
-            "success": True,
-            "ticket_id": ticket.id,
-            "message": "A support ticket has been created and a human agent will take over shortly."
-        }
-    except Exception as e:
-        db.rollback()
-        return {"error": f"Failed: {str(e)}"}
-    finally:
-        db.close()
+async def check_return_eligibility(order_id_or_tracking: str) -> Dict[str, Any]:
+    return await call_node_api("GET", f"/orders/{order_id_or_tracking}/return-eligibility")
+
+async def cancel_order(order_id_or_tracking: str) -> Dict[str, Any]:
+    return await call_node_api("POST", f"/orders/{order_id_or_tracking}/cancel")
+
+async def search_products(query: str) -> Dict[str, Any]:
+    return await call_node_api("GET", "/products/search", params={"query": query})
+
+async def create_support_ticket(conversation_id: str, email: str, reason: str) -> Dict[str, Any]:
+    # conversation_id is handled locally or passed to node
+    return await call_node_api("POST", "/tickets", data={
+        "email": email,
+        "reason": f"Ticket from AI (ID: {conversation_id}): {reason}"
+    })
 
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "get_order_details",
-            "description": "Get order details. Requires email for verification.",
+            "description": "Get order details including status and delivery date.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "order_id_or_tracking": {"type": "string"},
-                    "email": {"type": "string", "description": "Auto-filled by system"}
+                    "email": {"type": "string"}
                 },
                 "required": ["order_id_or_tracking"]
             }
@@ -197,7 +81,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "check_return_eligibility",
-            "description": "Check if an order is eligible for return based on store policy.",
+            "description": "Check if an order can be returned.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -211,7 +95,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "cancel_order",
-            "description": "Cancel an order if allowed and in processing status.",
+            "description": "Request cancellation of an order.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -224,12 +108,26 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "list_customer_orders",
-            "description": "List all orders for a customer email.",
+            "name": "search_products",
+            "description": "Search for products by name or description.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "email": {"type": "string", "description": "Auto-filled by system"}
+                    "query": {"type": "string"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_customer_orders",
+            "description": "List history of orders for a customer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "email": {"type": "string"}
                 },
                 "required": []
             }
@@ -239,12 +137,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_support_ticket",
-            "description": "Create a support ticket for human escalation.",
+            "description": "Escalate to a human agent.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "conversation_id": {"type": "string"},
-                    "email": {"type": "string", "description": "Auto-filled by system"},
                     "reason": {"type": "string"}
                 },
                 "required": ["reason"]
@@ -253,15 +149,12 @@ TOOLS = [
     }
 ]
 
-def call_tool(name: str, args: Dict[str, Any]) -> Any:
-    # Use cached version for order details to reduce DB load
-    if name == "get_order_details": 
-        return get_cached_order_details(**args)
-    if name == "check_return_eligibility": return check_return_eligibility(**args)
-    if name == "cancel_order": 
-        # Clear cache on mutation
-        get_cached_order_details.cache_clear()
-        return cancel_order(**args)
-    if name == "list_customer_orders": return list_customer_orders(**args)
-    if name == "create_support_ticket": return create_support_ticket(**args)
+async def call_tool(name: str, args: Dict[str, Any]) -> Any:
+    # Note: These are now async functions
+    if name == "get_order_details": return await get_order_details(**args)
+    if name == "check_return_eligibility": return await check_return_eligibility(**args)
+    if name == "cancel_order": return await cancel_order(**args)
+    if name == "list_customer_orders": return await list_customer_orders(**args)
+    if name == "search_products": return await search_products(**args)
+    if name == "create_support_ticket": return await create_support_ticket(**args)
     return {"error": f"Tool {name} not found."}

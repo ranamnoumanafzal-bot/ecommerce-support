@@ -1,3 +1,4 @@
+const API_BASE = window.location.origin.includes('localhost') ? '' : 'http://localhost:8000';
 const chatDisplay = document.getElementById('chat-display');
 const userInput = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
@@ -17,7 +18,7 @@ async function userLogin() {
     const password = document.getElementById('customer-pass').value;
 
     try {
-        const response = await fetch('/login', {
+        const response = await fetch(`${API_BASE}/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password })
@@ -39,7 +40,7 @@ async function userLogin() {
 
 async function checkConnection() {
     try {
-        const response = await fetch('/health');
+        const response = await fetch(`${API_BASE}/health`);
         if (response.ok) {
             statusIndicator.className = 'status-indicator online';
             statusText.textContent = 'Backend Online';
@@ -65,7 +66,7 @@ async function pollMessages() {
     try {
         // We use the same chat endpoint or a new one to get history
         // For simplicity, let's add a quick history fetch in the background
-        const response = await fetch(`/chat/history?session_id=${sessionId}&email=${email}`, {
+        const response = await fetch(`${API_BASE}/chat/history?session_id=${sessionId}&email=${email}`, {
             headers: {
                 'Authorization': `Bearer ${userToken}`
             }
@@ -107,7 +108,7 @@ async function sendMessage() {
     const typingId = addTypingIndicator();
 
     try {
-        const response = await fetch('/chat', {
+        const response = await fetch(`${API_BASE}/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

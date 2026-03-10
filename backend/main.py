@@ -31,7 +31,6 @@ security = HTTPBearer()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -268,7 +267,7 @@ GUIDELINES:
                 if tc.function.name == "create_support_ticket":
                     args["conversation_id"] = conv.id
                 
-                tool_out = tools.call_tool(tc.function.name, args)
+                tool_out = await tools.call_tool(tc.function.name, args)
                 save_msg(db, conv.id, "tool", json.dumps(tool_out), tool_call_id=tc.id, name=tc.function.name)
                 history.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name, "content": json.dumps(tool_out)})
             
